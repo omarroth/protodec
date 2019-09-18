@@ -55,7 +55,7 @@ struct VarLong
   end
 end
 
-class ProtoBuf
+struct ProtoBuf::Any
   enum Tag
     VarInt          = 0
     Bit64           = 1
@@ -63,81 +63,77 @@ class ProtoBuf
     Bit32           = 5
   end
 
-  struct Any
-    alias Type = Int64 |
-                 Array(UInt8) |
-                 String |
-                 Hash(Int32, Type)
+  alias Type = Int64 |
+               Bytes |
+               String |
+               Hash(Int32, Type)
 
-    getter raw : Type
+  getter raw : Type
 
-    def initialize(@raw : Type)
-    end
+  def initialize(@raw : Type)
+  end
 
-    def self.parse(io : IO)
-      from_io(io, ignore_exceptions: true)
-    end
+  def self.parse(io : IO)
+    from_io(io, ignore_exceptions: true)
+  end
 
-    def self.from_io(io : IO, format = IO::ByteFormat::NetworkEndian, ignore_exceptions = false)
-      item = new({} of Int32 => Type)
+  def self.from_io(io : IO, format = IO::ByteFormat::NetworkEndian, ignore_exceptions = false)
+    item = new({} of Int32 => Type)
 
-      begin
-        until io.pos == io.size
-          header = io.read_bytes(VarLong)
-          field = (header >> 3).to_i
-          type = Tag.new((header & 0b111).to_i)
+    begin
+      until io.pos == io.size
+        header = io.read_bytes(VarLong)
+        field = (header >> 3).to_i
+        type = Tag.new((header & 0b111).to_i)
 
-          case type
-          when Tag::VarInt
-            value = io.read_bytes(VarLong)
-          when Tag::Bit64
-            value = Bytes.new(8)
-            io.read_fully(value)
-            value = value.to_a
-          when Tag::LengthDelimited
-            bytes = Bytes.new(io.read_bytes(VarLong))
-            io.read_fully(bytes)
+        case type
+        when Tag::VarInt
+          value = io.read_bytes(VarLong)
+        when Tag::Bit64
+          value = Bytes.new(8)
+          io.read_fully(value)
+        when Tag::LengthDelimited
+          bytes = Bytes.new(io.read_bytes(VarLong))
+          io.read_fully(bytes)
 
-            if bytes.empty?
-              value = ""
-            else
-              begin
-                value = from_io(IO::Memory.new(Base64.decode(URI.unescape(String.new(bytes))))).raw
-              rescue ex
-                if bytes.all? { |byte| {'\t'.ord, '\n'.ord, '\r'.ord}.includes?(byte) || byte >= 0x20 }
-                  value = String.new(bytes)
-                else
-                  begin
-                    value = from_io(IO::Memory.new(bytes)).raw
-                  rescue ex
-                    value = bytes.to_a
-                  end
+          if bytes.empty?
+            value = ""
+          else
+            begin
+              value = from_io(IO::Memory.new(Base64.decode(URI.unescape(String.new(bytes))))).raw
+            rescue ex
+              if bytes.all? { |byte| {'\t'.ord, '\n'.ord, '\r'.ord}.includes?(byte) || byte >= 0x20 }
+                value = String.new(bytes)
+              else
+                begin
+                  value = from_io(IO::Memory.new(bytes)).raw
+                rescue ex
+                  value = bytes
                 end
               end
             end
-          when Tag::Bit32
-            value = Bytes.new(4)
-            io.read_fully(value)
-            value = value.to_a
-          else
-            break if ignore_exceptions
-            raise "Invalid type #{type}"
           end
-
-          item[field] = value.as(Type)
+        when Tag::Bit32
+          value = Bytes.new(4)
+          io.read_fully(value)
+        else
+          break if ignore_exceptions
+          raise "Invalid type #{type}"
         end
-      end
 
-      item
+        item[field] = value.as(Type)
+      end
     end
 
-    def []=(key : Int32, value : Type)
-      case object = @raw
-      when Hash
-        object[key] = value
-      else
-        raise "Expected Hash for #[]=(key : Int32, value : Type), not #{object.class}"
-      end
+    item
+  end
+
+  def []=(key : Int32, value : Type)
+    case object = @raw
+    when Hash
+      object[key] = value
+    else
+      raise "Expected Hash for #[]=(key : Int32, value : Type), not #{object.class}"
     end
   end
 end
