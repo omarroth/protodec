@@ -59,15 +59,6 @@ struct ProtoBuf::Any
   def initialize(@raw : Type)
   end
 
-  def self.likely_string?(bytes)
-    return bytes.all? { |byte| {'\t'.ord, '\n'.ord, '\r'.ord}.includes?(byte) || 0x20 <= byte <= 0x7e }
-  end
-
-  def self.likely_base64?(string)
-    decoded = URI.unescape(URI.unescape(string))
-    return decoded.size % 4 == 0 && decoded.match(/[A-Za-z0-9_+\/-]+=*/)
-  end
-
   def self.parse(io : IO)
     from_io(io, ignore_exceptions: true)
   end
@@ -113,24 +104,22 @@ struct ProtoBuf::Any
           bytes = Bytes.new(size)
           io.read_fully(bytes)
 
-          if bytes.empty?
+          value = String.new(bytes)
+          if value.empty?
             value = ""
+          elsif value.valid_encoding? && !value.codepoints.any? { |codepoint|
+                  (0x00..0x1f).includes?(codepoint) &&
+                  !{0x09, 0x0a, 0x0d}.includes?(codepoint)
+                }
+            begin
+              value = from_io(IO::Memory.new(Base64.decode(URI.unescape(URI.unescape(value))))).raw
+            rescue ex
+            end
           else
-            if likely_string?(bytes)
-              value = String.new(bytes)
-
-              if likely_base64?(value)
-                begin
-                  value = from_io(IO::Memory.new(Base64.decode(URI.unescape(URI.unescape(value))))).raw
-                rescue ex
-                end
-              end
-            else
-              begin
-                value = from_io(IO::Memory.new(bytes)).raw
-              rescue ex
-                value = bytes.to_a
-              end
+            begin
+              value = from_io(IO::Memory.new(bytes)).raw
+            rescue ex
+              value = bytes.to_a
             end
           end
         else
@@ -141,9 +130,7 @@ struct ProtoBuf::Any
         index += 1
       end
     rescue ex
-      if !ignore_exceptions
-        raise ex
-      end
+      raise ex if !ignore_exceptions
     end
 
     item
@@ -178,17 +165,18 @@ enum OutputType
   JsonPretty
 end
 
-input_type = InputType::Hex
+input_type = InputType::Raw
 output_type = OutputType::Json
 
 OptionParser.parse! do |parser|
   parser.banner = <<-'END_USAGE'
   Usage: protodec [arguments]
-  Command-line decoder for arbitrary protobuf data.
+  Command-line decoder for arbitrary protobuf data. Reads from standard input.
   END_USAGE
 
   parser.on("-d", "--decode", "STDIN is Base64-encoded") { input_type = InputType::Base64 }
-  parser.on("-r", "--raw", "STDIN is raw binary data") { input_type = InputType::Raw }
+  parser.on("-x", "--hex", "STDIN is space-separated hexstring") { input_type = InputType::Hex }
+  parser.on("-r", "--raw", "STDIN is raw binary data (default)") { input_type = InputType::Raw }
   parser.on("-p", "--pretty", "Pretty print output") { output_type = OutputType::JsonPretty }
   parser.on("-h", "--help", "Show this help") { puts parser; exit(0) }
 end
@@ -196,7 +184,7 @@ end
 input = STDIN.gets_to_end
 case input_type
 when InputType::Base64
-  input = Base64.decode(URI.unescape(URI.unescape(input)))
+  input = Base64.decode(URI.unescape(URI.unescape(input.strip)))
 when InputType::Hex
   array = input.strip.split(/[- ,]+/).map &.to_i(16).to_u8
   input = Slice.new(array.size) { |i| array[i] }
