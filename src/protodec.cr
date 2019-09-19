@@ -37,22 +37,6 @@ struct VarLong
 
     result
   end
-
-  def self.to_io(io : IO, value : Int64)
-    io.write_byte 0x00 if value == 0x00
-    value = value.to_u64
-
-    while value != 0
-      byte = (value & 0x7f).to_u8
-      value >>= 7
-
-      if value != 0
-        byte |= 0x80
-      end
-
-      io.write_byte byte
-    end
-  end
 end
 
 struct ProtoBuf::Any
@@ -64,13 +48,23 @@ struct ProtoBuf::Any
   end
 
   alias Type = Int64 |
-               Bytes |
+               Float64 |
+               Array(UInt8) |
                String |
                Hash(Int32, Type)
 
   getter raw : Type
 
   def initialize(@raw : Type)
+  end
+
+  def self.likely_string?(bytes)
+    return bytes.all? { |byte| {'\t'.ord, '\n'.ord, '\r'.ord}.includes?(byte) || 0x20 <= byte <= 0x7e }
+  end
+
+  def self.likely_base64?(string)
+    decoded = URI.unescape(URI.unescape(string))
+    return decoded.size % 4 == 0 && decoded.match(/[A-Za-z0-9_+\/-]+=+/)
   end
 
   def self.parse(io : IO)
@@ -89,39 +83,63 @@ struct ProtoBuf::Any
         case type
         when Tag::VarInt
           value = io.read_bytes(VarLong)
+        when Tag::Bit32
+          value = io.read_bytes(Int32)
+          bytes = IO::Memory.new
+          value.to_io(bytes, IO::ByteFormat::LittleEndian)
+          bytes.rewind
+
+          begin
+            value = bytes.read_bytes(Float32, format: IO::ByteFormat::LittleEndian).to_f64
+          rescue ex
+            value = value.to_i64
+          end
         when Tag::Bit64
-          value = Bytes.new(8)
-          io.read_fully(value)
+          value = io.read_bytes(Int64)
+          bytes = IO::Memory.new
+          value.to_io(bytes, IO::ByteFormat::LittleEndian)
+          bytes.rewind
+
+          begin
+            value = bytes.read_bytes(Float64, format: IO::ByteFormat::LittleEndian)
+          rescue ex
+          end
         when Tag::LengthDelimited
-          bytes = Bytes.new(io.read_bytes(VarLong))
+          size = io.read_bytes(VarLong)
+          raise "Invalid size" if size > 2**20
+
+          bytes = Bytes.new(size)
           io.read_fully(bytes)
 
           if bytes.empty?
             value = ""
           else
-            begin
-              value = from_io(IO::Memory.new(Base64.decode(URI.unescape(String.new(bytes))))).raw
-            rescue ex
-              if bytes.all? { |byte| {'\t'.ord, '\n'.ord, '\r'.ord}.includes?(byte) || byte >= 0x20 }
-                value = String.new(bytes)
-              else
+            if likely_string?(bytes)
+              value = String.new(bytes)
+
+              if likely_base64?(value)
                 begin
-                  value = from_io(IO::Memory.new(bytes)).raw
+                  value = from_io(IO::Memory.new(Base64.decode(URI.unescape(URI.unescape(value)))), ignore_exceptions: true).raw
                 rescue ex
-                  value = bytes
                 end
+              end
+            else
+              begin
+                value = from_io(IO::Memory.new(bytes)).raw
+              rescue ex
+                value = bytes.to_a
               end
             end
           end
-        when Tag::Bit32
-          value = Bytes.new(4)
-          io.read_fully(value)
         else
-          break if ignore_exceptions
           raise "Invalid type #{type}"
         end
 
         item[field] = value.as(Type)
+      end
+    rescue ex
+      if !ignore_exceptions
+        raise ex
       end
     end
 
@@ -141,23 +159,29 @@ end
 enum InputType
   Base64
   Hex
+  Raw
 end
 
 input_type = InputType::Hex
 
 OptionParser.parse! do |parser|
-  parser.banner = "Usage: protodec [arguments]\n"
+  parser.banner = <<-'END_USAGE'
+  Usage: protodec [arguments]
+  Command-line decoder for arbitrary protobuf data.
+  END_USAGE
   parser.on("-d", "--decode", "STDIN is Base64-encoded") { input_type = InputType::Base64 }
-  parser.on("-h", "--help", "Show this help") { puts parser }
+  parser.on("-r", "--raw", "STDIN is raw binary data") { input_type = InputType::Raw }
+  parser.on("-h", "--help", "Show this help") { puts parser; exit(0) }
 end
 
 input = STDIN.gets_to_end
 case input_type
-when InputType::Hex
-  array = input.split("-").map &.to_i(16).to_u8
-  input = Slice.new(array.size) { |i| array[i] }
 when InputType::Base64
-  input = Base64.decode(URI.unescape(input))
+  input = Base64.decode(URI.unescape(URI.unescape(input)))
+when InputType::Hex
+  array = input.strip.split(/[- ,]+/).map &.to_i(16).to_u8
+  input = Slice.new(array.size) { |i| array[i] }
+when InputType::Raw
 end
 
 pp ProtoBuf::Any.parse(IO::Memory.new(input)).raw
