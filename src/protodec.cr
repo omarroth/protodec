@@ -167,6 +167,7 @@ end
 
 input_type = InputType::Raw
 output_type = OutputType::Json
+flags = [] of String
 
 OptionParser.parse! do |parser|
   parser.banner = <<-'END_USAGE'
@@ -174,11 +175,31 @@ OptionParser.parse! do |parser|
   Command-line decoder for arbitrary protobuf data. Reads from standard input.
   END_USAGE
 
-  parser.on("-d", "--decode", "STDIN is Base64-encoded") { input_type = InputType::Base64 }
-  parser.on("-x", "--hex", "STDIN is space-separated hexstring") { input_type = InputType::Hex }
-  parser.on("-r", "--raw", "STDIN is raw binary data (default)") { input_type = InputType::Raw }
-  parser.on("-p", "--pretty", "Pretty print output") { output_type = OutputType::JsonPretty }
-  parser.on("-h", "--help", "Show this help") { puts parser; exit(0) }
+  parser.on("-d", "--decode", "STDIN is Base64-encoded") { flags << "d" }
+  parser.on("-x", "--hex", "STDIN is space-separated hexstring") { flags << "x" }
+  parser.on("-r", "--raw", "STDIN is raw binary data (default)") { flags << "r" }
+  parser.on("-p", "--pretty", "Pretty print output") { flags << "p" }
+  parser.on("-h", "--help", "Show this help") { STDOUT.puts parser; exit(0) }
+
+  parser.invalid_option do |option|
+    flags += option.split("")[1..-1]
+  end
+end
+
+flags.each do |flag|
+  case flag
+  when "d"
+    input_type = InputType::Base64
+  when "x"
+    input_type = InputType::Hex
+  when "r"
+    input_type = InputType::Raw
+  when "p"
+    output_type = OutputType::JsonPretty
+  else
+    STDERR.puts "ERROR: #{flag} is not a valid option."
+    exit(1)
+  end
 end
 
 input = STDIN.gets_to_end
@@ -194,7 +215,7 @@ end
 output = ProtoBuf::Any.parse(IO::Memory.new(input))
 case output_type
 when OutputType::Json
-  puts output.to_json
+  STDOUT.puts output.to_json
 when OutputType::JsonPretty
-  puts output.to_pretty_json
+  STDOUT.puts output.to_pretty_json
 end
