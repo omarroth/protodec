@@ -52,7 +52,7 @@ struct ProtoBuf::Any
                Float64 |
                Array(UInt8) |
                String |
-               Hash(Int32, Type)
+               Hash(String, Type)
 
   getter raw : Type
 
@@ -73,7 +73,8 @@ struct ProtoBuf::Any
   end
 
   def self.from_io(io : IO, format = IO::ByteFormat::NetworkEndian, ignore_exceptions = false)
-    item = new({} of Int32 => Type)
+    item = new({} of String => Type)
+    index = 0
 
     begin
       until io.pos == io.size
@@ -136,7 +137,8 @@ struct ProtoBuf::Any
           raise "Invalid type #{type}"
         end
 
-        item[field] = value.as(Type)
+        item["#{field}:#{index}"] = value.as(Type)
+        index += 1
       end
     rescue ex
       if !ignore_exceptions
@@ -147,12 +149,12 @@ struct ProtoBuf::Any
     item
   end
 
-  def []=(key : Int32, value : Type)
+  def []=(key : String, value : Type)
     case object = @raw
     when Hash
       object[key] = value
     else
-      raise "Expected Hash for #[]=(key : Int32, value : Type), not #{object.class}"
+      raise "Expected Hash for #[]=(key : String, value : Type), not #{object.class}"
     end
   end
 
