@@ -15,6 +15,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 require "base64"
+require "json"
 require "option_parser"
 require "uri"
 
@@ -64,7 +65,7 @@ struct ProtoBuf::Any
 
   def self.likely_base64?(string)
     decoded = URI.unescape(URI.unescape(string))
-    return decoded.size % 4 == 0 && decoded.match(/[A-Za-z0-9_+\/-]+=+/)
+    return decoded.size % 4 == 0 && decoded.match(/[A-Za-z0-9_+\/-]+=*/)
   end
 
   def self.parse(io : IO)
@@ -119,7 +120,7 @@ struct ProtoBuf::Any
 
               if likely_base64?(value)
                 begin
-                  value = from_io(IO::Memory.new(Base64.decode(URI.unescape(URI.unescape(value)))), ignore_exceptions: true).raw
+                  value = from_io(IO::Memory.new(Base64.decode(URI.unescape(URI.unescape(value))))).raw
                 rescue ex
                 end
               end
@@ -154,6 +155,14 @@ struct ProtoBuf::Any
       raise "Expected Hash for #[]=(key : Int32, value : Type), not #{object.class}"
     end
   end
+
+  def to_json
+    raw.to_json
+  end
+
+  def to_json(json)
+    raw.to_json(json)
+  end
 end
 
 enum InputType
@@ -162,15 +171,23 @@ enum InputType
   Raw
 end
 
+enum OutputType
+  Json
+  JsonPretty
+end
+
 input_type = InputType::Hex
+output_type = OutputType::Json
 
 OptionParser.parse! do |parser|
   parser.banner = <<-'END_USAGE'
   Usage: protodec [arguments]
   Command-line decoder for arbitrary protobuf data.
   END_USAGE
+
   parser.on("-d", "--decode", "STDIN is Base64-encoded") { input_type = InputType::Base64 }
   parser.on("-r", "--raw", "STDIN is raw binary data") { input_type = InputType::Raw }
+  parser.on("-p", "--pretty", "Pretty print output") { output_type = OutputType::JsonPretty }
   parser.on("-h", "--help", "Show this help") { puts parser; exit(0) }
 end
 
@@ -184,4 +201,10 @@ when InputType::Hex
 when InputType::Raw
 end
 
-pp ProtoBuf::Any.parse(IO::Memory.new(input)).raw
+output = ProtoBuf::Any.parse(IO::Memory.new(input))
+case output_type
+when OutputType::Json
+  puts output.to_json
+when OutputType::JsonPretty
+  puts output.to_pretty_json
+end
