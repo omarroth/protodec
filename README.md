@@ -7,21 +7,23 @@ Command-line tool to encode and decode arbitrary protobuf data.
 ```
 $ ./protodec -h
 Usage: protodec [arguments]
-Command-line decoder for arbitrary protobuf data. Reads from standard input.
-    -r, --raw                        STDIN is raw binary data (default)
+Command-line encoder and decoder for arbitrary protobuf data. Reads from standard input.
+    -e, --encode                     Encode input
+    -d, --decode                     Decode input (default)
+    -b, --base64                     STDIN is Base64-encoded
     -x, --hex                        STDIN is space-separated hexstring
-    -d, --decode                     STDIN is Base64-encoded
+    -r, --raw                        STDIN is raw binary data (default)
     -p, --pretty                     Pretty print output
     -h, --help                       Show this help
 ```
 
 ```
-$ echo 'CkEKCeOCj+OBn+OBlxDSCSIQWmQ730+N8z8tsp3vp8YJQCoSCAESBzA4MDAwMDAaBQ26sSZEKgsIARIHMDgwMDAwMBXD9UhA' | ./protodec -dp
+$ echo 'CkEKCeOCj+OBn+OBlxDSCSIQWmQ730+N8z8tsp3vp8YJQCoSCAESBzA4MDAwMDAaBQ26sSZEKgsIARIHMDgwMDAwMBXD9UhA' | ./protodec -bp
 {
-  "1:0": {
-    "1:0": "わたし",
-    "2:1": 1234,
-    "4:2": [
+  "1:0:embedded": {
+    "1:0:string": "わたし",
+    "2:1:varint": 1234,
+    "4:2:bytes": [
       90,
       100,
       59,
@@ -39,19 +41,19 @@ $ echo 'CkEKCeOCj+OBn+OBlxDSCSIQWmQ730+N8z8tsp3vp8YJQCoSCAESBzA4MDAwMDAaBQ26sSZE
       9,
       64
     ],
-    "5:3": {
-      "1:0": 1,
-      "2:1": "0800000",
-      "3:2": {
-        "1:0": 666.7769775390625
+    "5:3:embedded": {
+      "1:0:varint": 1,
+      "2:1:string": "0800000",
+      "3:2:embedded": {
+        "1:0:float32": 666.7769775390625
       }
     },
-    "5:4": {
-      "1:0": 1,
-      "2:1": "0800000"
+    "5:4:embedded": {
+      "1:0:varint": 1,
+      "2:1:string": "0800000"
     }
   },
-  "2:1": 3.140000104904175
+  "2:1:float32": 3.140000104904175
 }
 ```
 
