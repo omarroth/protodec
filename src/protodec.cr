@@ -38,6 +38,22 @@ struct VarLong
 
     result
   end
+
+  def self.to_io(io : IO, value : Int64)
+    io.write_byte 0x00 if value == 0x00
+    value = value.to_u64
+
+    while value != 0
+      byte = (value & 0x7f).to_u8
+      value >>= 7
+
+      if value != 0
+        byte |= 0x80
+      end
+
+      io.write_byte byte
+    end
+  end
 end
 
 struct ProtoBuf::Any
@@ -47,6 +63,18 @@ struct ProtoBuf::Any
     LengthDelimited = 2
     Bit32           = 5
   end
+
+  TAG_MAP = {
+    "varint"   => 0,
+    "float32"  => 5,
+    "int32"    => 5,
+    "float64"  => 1,
+    "int64"    => 1,
+    "string"   => 2,
+    "embedded" => 2,
+    "base64"   => 2,
+    "bytes"    => 2,
+  }
 
   alias Type = Int64 |
                Float64 |
@@ -76,6 +104,7 @@ struct ProtoBuf::Any
         case type
         when Tag::VarInt
           value = io.read_bytes(VarLong)
+          key = "#{field}:#{index}:varint"
         when Tag::Bit32
           value = io.read_bytes(Int32)
           bytes = IO::Memory.new
@@ -84,8 +113,10 @@ struct ProtoBuf::Any
 
           begin
             value = bytes.read_bytes(Float32, format: IO::ByteFormat::LittleEndian).to_f64
+            key = "#{field}:#{index}:float32"
           rescue ex
             value = value.to_i64
+            key = "#{field}:#{index}:int32"
           end
         when Tag::Bit64
           value = io.read_bytes(Int64)
@@ -95,11 +126,13 @@ struct ProtoBuf::Any
 
           begin
             value = bytes.read_bytes(Float64, format: IO::ByteFormat::LittleEndian)
+            key = "#{field}:#{index}:float64"
           rescue ex
+            key = "#{field}:#{index}:int64"
           end
         when Tag::LengthDelimited
           size = io.read_bytes(VarLong)
-          raise "Invalid size" if size > 2**20
+          raise "Invalid size" if size > 2**22
 
           bytes = Bytes.new(size)
           io.read_fully(bytes)
@@ -107,26 +140,31 @@ struct ProtoBuf::Any
           value = String.new(bytes)
           if value.empty?
             value = ""
+            key = "#{field}:#{index}:string"
           elsif value.valid_encoding? && !value.codepoints.any? { |codepoint|
                   (0x00..0x1f).includes?(codepoint) &&
                   !{0x09, 0x0a, 0x0d}.includes?(codepoint)
                 }
             begin
               value = from_io(IO::Memory.new(Base64.decode(URI.unescape(URI.unescape(value))))).raw
+              key = "#{field}:#{index}:base64"
             rescue ex
+              key = "#{field}:#{index}:string"
             end
           else
             begin
               value = from_io(IO::Memory.new(bytes)).raw
+              key = "#{field}:#{index}:embedded"
             rescue ex
               value = bytes.to_a
+              key = "#{field}:#{index}:bytes"
             end
           end
         else
           raise "Invalid type #{type}"
         end
 
-        item["#{field}:#{index}"] = value.as(Type)
+        item[key] = value.as(Type)
         index += 1
       end
     rescue ex
@@ -152,30 +190,79 @@ struct ProtoBuf::Any
   def to_json(json)
     raw.to_json(json)
   end
+
+  def self.from_json(json : JSON::Any, io : IO, format = IO::ByteFormat::NetworkEndian)
+    case object = json.raw
+    when Hash
+      object.each do |key, value|
+        parts = key.split(":")
+        field = parts[0].to_i64
+        type = parts[-1]
+
+        header = (field << 3) | TAG_MAP[type]
+        VarLong.to_io(io, header)
+
+        case type
+        when "varint"
+          VarLong.to_io(io, value.as_i64)
+        when "int32"
+          value.as_i64.to_i32.to_io(io, IO::ByteFormat::LittleEndian)
+        when "float32"
+          value.as_f32.to_f32.to_io(io, IO::ByteFormat::LittleEndian)
+        when "int64"
+          value.as_i64.to_io(io, IO::ByteFormat::LittleEndian)
+        when "float64"
+          value.as_f32.to_f64.to_io(io, IO::ByteFormat::LittleEndian)
+        when "string"
+          VarLong.to_io(io, value.as_s.size.to_i64)
+          value.as_s.to_s(io)
+        when "base64"
+          buffer = IO::Memory.new
+          from_json(value, buffer)
+          buffer.rewind
+
+          buffer = Base64.urlsafe_encode(buffer, padding: false)
+          VarLong.to_io(io, buffer.size.to_i64)
+          buffer.to_s(io)
+        when "embedded"
+          buffer = IO::Memory.new
+          from_json(value, buffer)
+          buffer.rewind
+
+          VarLong.to_io(io, buffer.size.to_i64)
+          IO.copy(buffer, io)
+        when "bytes"
+          VarLong.to_io(io, value.size.to_i64)
+          value.as_a.each { |byte| io.write_byte byte.as_i.to_u8 }
+        end
+      end
+    else
+      raise "Invalid value #{json}"
+    end
+  end
 end
 
-enum InputType
+enum IOType
   Base64
   Hex
   Raw
-end
-
-enum OutputType
   Json
   JsonPretty
 end
 
-input_type = InputType::Raw
-output_type = OutputType::Json
+input_type = nil
+output_type = nil
 flags = [] of String
 
 OptionParser.parse! do |parser|
   parser.banner = <<-'END_USAGE'
   Usage: protodec [arguments]
-  Command-line decoder for arbitrary protobuf data. Reads from standard input.
+  Command-line encoder and decoder for arbitrary protobuf data. Reads from standard input.
   END_USAGE
 
-  parser.on("-d", "--decode", "STDIN is Base64-encoded") { flags << "d" }
+  parser.on("-e", "--encode", "Encode input") { flags << "e" }
+  parser.on("-d", "--decode", "Decode input (default)") { flags << "d" }
+  parser.on("-b", "--base64", "STDIN is Base64-encoded") { flags << "b" }
   parser.on("-x", "--hex", "STDIN is space-separated hexstring") { flags << "x" }
   parser.on("-r", "--raw", "STDIN is raw binary data (default)") { flags << "r" }
   parser.on("-p", "--pretty", "Pretty print output") { flags << "p" }
@@ -188,34 +275,57 @@ end
 
 flags.each do |flag|
   case flag
-  when "d"
-    input_type = InputType::Base64
+  when "b"
+    input_type = IOType::Base64
   when "x"
-    input_type = InputType::Hex
+    input_type = IOType::Hex
   when "r"
-    input_type = InputType::Raw
+    input_type = IOType::Raw
   when "p"
-    output_type = OutputType::JsonPretty
+    output_type = IOType::JsonPretty
+  when "e", "d"
   else
     STDERR.puts "ERROR: #{flag} is not a valid option."
     exit(1)
   end
 end
 
-input = STDIN.gets_to_end
-case input_type
-when InputType::Base64
-  input = Base64.decode(URI.unescape(URI.unescape(input.strip)))
-when InputType::Hex
-  array = input.strip.split(/[- ,]+/).map &.to_i(16).to_u8
-  input = Slice.new(array.size) { |i| array[i] }
-when InputType::Raw
+if flags.includes? "e"
+  tmp = output_type
+  output_type = input_type
+  input_type = tmp
+
+  input_type ||= IOType::Json
+  output_type ||= IOType::Base64
+else
+  input_type ||= IOType::Raw
+  output_type ||= IOType::Json
 end
 
-output = ProtoBuf::Any.parse(IO::Memory.new(input))
+case input_type
+when IOType::Base64
+  output = ProtoBuf::Any.parse(IO::Memory.new(Base64.decode(URI.unescape(URI.unescape(STDIN.gets_to_end.strip)))))
+when IOType::Hex
+  array = STDIN.gets_to_end.strip.split(/[- ,]+/).map &.to_i(16).to_u8
+  output = ProtoBuf::Any.parse(IO::Memory.new(Slice.new(array.size) { |i| array[i] }))
+when IOType::Raw
+  output = ProtoBuf::Any.parse(IO::Memory.new(STDIN.gets_to_end))
+when IOType::Json, IOType::JsonPretty
+  output = IO::Memory.new
+  ProtoBuf::Any.from_json(JSON.parse(STDIN), output)
+else
+  output = ""
+end
+
 case output_type
-when OutputType::Json
-  STDOUT.puts output.to_json
-when OutputType::JsonPretty
-  STDOUT.puts output.to_pretty_json
+when IOType::Base64
+  STDOUT.puts Base64.urlsafe_encode(output.as(IO))
+when IOType::Hex
+  STDOUT.puts (output.as(IO).to_slice.map &.to_s(16).rjust(2, '0').upcase).join("-")
+when IOType::Raw
+  STDOUT.write output.as(IO).to_slice
+when IOType::Json
+  STDOUT.puts output.as(ProtoBuf::Any).to_json
+when IOType::JsonPretty
+  STDOUT.puts output.as(ProtoBuf::Any).to_pretty_json
 end
