@@ -214,22 +214,22 @@ struct ProtoBuf::Any
         when "float64"
           value.as_f32.to_f64.to_io(io, IO::ByteFormat::LittleEndian)
         when "string"
-          VarLong.to_io(io, value.as_s.size.to_i64)
-          value.as_s.to_s(io)
+          VarLong.to_io(io, value.as_s.bytesize.to_i64)
+          io.print value.as_s
         when "base64"
           buffer = IO::Memory.new
           from_json(value, buffer)
           buffer.rewind
 
           buffer = Base64.urlsafe_encode(buffer, padding: false)
-          VarLong.to_io(io, buffer.size.to_i64)
+          VarLong.to_io(io, buffer.bytesize.to_i64)
           buffer.to_s(io)
         when "embedded"
           buffer = IO::Memory.new
           from_json(value, buffer)
           buffer.rewind
 
-          VarLong.to_io(io, buffer.size.to_i64)
+          VarLong.to_io(io, buffer.bytesize.to_i64)
           IO.copy(buffer, io)
         when "bytes"
           VarLong.to_io(io, value.size.to_i64)
