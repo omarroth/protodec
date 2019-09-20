@@ -1,6 +1,6 @@
 # protodec
 
-Command-line tool to decode arbitrary protobuf data.
+Command-line tool to encode and decode arbitrary protobuf data.
 
 ## Usage
 
