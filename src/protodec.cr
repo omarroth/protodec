@@ -51,10 +51,10 @@ struct VarLong
 
   def self.to_io(io : IO, value : Int64)
     io.write_byte 0x00 if value == 0x00
-    value = value.to_u64
+    value = value.to_u64!
 
     while value != 0
-      byte = (value & 0x7f).to_u8
+      byte = (value & 0x7f).to_u8!
       value >>= 7
 
       if value != 0
