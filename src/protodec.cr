@@ -19,6 +19,16 @@ require "json"
 require "option_parser"
 require "uri"
 
+CURRENT_BRANCH  = {{ "#{`git branch | sed -n '/\* /s///p'`.strip}" }}
+CURRENT_COMMIT  = {{ "#{`git rev-list HEAD --max-count=1 --abbrev-commit`.strip}" }}
+CURRENT_VERSION = {{ "#{`git describe --tags --abbrev=0`.strip}" }}
+
+SOFTWARE = {
+  "name"    => "protodec",
+  "version" => "#{CURRENT_VERSION}-#{CURRENT_COMMIT}",
+  "branch"  => "#{CURRENT_BRANCH}",
+}
+
 struct VarLong
   def self.from_io(io : IO, format = IO::ByteFormat::NetworkEndian) : Int64
     result = 0_i64
@@ -146,7 +156,7 @@ struct ProtoBuf::Any
                   !{0x09, 0x0a, 0x0d}.includes?(codepoint)
                 }
             begin
-              value = from_io(IO::Memory.new(Base64.decode(URI.unescape(URI.unescape(value))))).raw
+              value = from_io(IO::Memory.new(Base64.decode(URI.decode_www_form(URI.decode_www_form(value))))).raw
               key = "#{field}:#{index}:base64"
             rescue ex
               key = "#{field}:#{index}:string"
@@ -204,15 +214,15 @@ struct ProtoBuf::Any
 
         case type
         when "varint"
-          VarLong.to_io(io, value.as_i64)
+          VarLong.to_io(io, value.raw.as(Number).to_i64!)
         when "int32"
-          value.as_i64.to_i32.to_io(io, IO::ByteFormat::LittleEndian)
+          value.raw.as(Number).to_i32!.to_io(io, IO::ByteFormat::LittleEndian)
         when "float32"
-          value.as_f32.to_f32.to_io(io, IO::ByteFormat::LittleEndian)
+          value.raw.as(Number).to_f32!.to_io(io, IO::ByteFormat::LittleEndian)
         when "int64"
-          value.as_i64.to_io(io, IO::ByteFormat::LittleEndian)
+          value.raw.as(Number).to_i64!.to_io(io, IO::ByteFormat::LittleEndian)
         when "float64"
-          value.as_f32.to_f64.to_io(io, IO::ByteFormat::LittleEndian)
+          value.raw.as(Number).to_f64!.to_io(io, IO::ByteFormat::LittleEndian)
         when "string"
           VarLong.to_io(io, value.as_s.bytesize.to_i64)
           io.print value.as_s
@@ -254,7 +264,7 @@ input_type = nil
 output_type = nil
 flags = [] of String
 
-OptionParser.parse! do |parser|
+OptionParser.parse do |parser|
   parser.banner = <<-'END_USAGE'
   Usage: protodec [arguments]
   Command-line encoder and decoder for arbitrary protobuf data. Reads from standard input.
@@ -284,6 +294,13 @@ flags.each do |flag|
   when "p"
     output_type = IOType::JsonPretty
   when "e", "d"
+  when "v"
+    if flags.includes? "p"
+      STDOUT.puts SOFTWARE.to_pretty_json
+    else
+      STDOUT.puts SOFTWARE.to_json
+    end
+    exit(0)
   else
     STDERR.puts "ERROR: #{flag} is not a valid option."
     exit(1)
@@ -304,7 +321,7 @@ end
 
 case input_type
 when IOType::Base64
-  output = ProtoBuf::Any.parse(IO::Memory.new(Base64.decode(URI.unescape(URI.unescape(STDIN.gets_to_end.strip)))))
+  output = ProtoBuf::Any.parse(IO::Memory.new(Base64.decode(URI.decode_www_form(URI.decode_www_form(STDIN.gets_to_end.strip)))))
 when IOType::Hex
   array = STDIN.gets_to_end.strip.split(/[- ,]+/).map &.to_i(16).to_u8
   output = ProtoBuf::Any.parse(IO::Memory.new(Slice.new(array.size) { |i| array[i] }))
