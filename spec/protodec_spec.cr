@@ -2,7 +2,7 @@ require "./spec_helper"
 
 describe Protodec do
   it "decodes Base64 data" do
-    input = "4qmFsgIrEhhVQ0NqOTU2SUY2MkZiVDdHb3VzemFqOXcaD0VnbGpiMjF0ZFc1cGRIaw"
+    input = "4qmFsgIsEhhVQ0NqOTU2SUY2MkZiVDdHb3VzemFqOXcaEEVnbGpiMjF0ZFc1cGRIaz0"
     output = input.strip
       .try { |i| URI.decode_www_form(i) }
       .try { |i| URI.decode_www_form(i) }
@@ -24,6 +24,6 @@ describe Protodec do
       },
     })
 
-    Base64.urlsafe_encode(Protodec::Any.from_json(object), padding: false).should eq("4qmFsgIrEhhVQ0NqOTU2SUY2MkZiVDdHb3VzemFqOXcaD0VnbGpiMjF0ZFc1cGRIaw")
+    Base64.urlsafe_encode(Protodec::Any.from_json(object), padding: false).should eq("4qmFsgIsEhhVQ0NqOTU2SUY2MkZiVDdHb3VzemFqOXcaEEVnbGpiMjF0ZFc1cGRIaz0")
   end
 end
