@@ -200,7 +200,7 @@ module Protodec
             from_json(value, buffer)
             buffer.rewind
 
-            buffer = Base64.urlsafe_encode(buffer, padding: false)
+            buffer = Base64.urlsafe_encode(buffer)
             VarLong.to_io(io, buffer.bytesize.to_i64)
             buffer.to_s(io)
           when "embedded"
@@ -472,6 +472,17 @@ module Protodec
         case value
         when .is_a?(Hash)
           cast_json(value)
+        when .is_a?(Protodec::Any)
+          case raw = value.raw
+          when Array(UInt8)
+            JSON::Any.new(raw.map { |i| JSON::Any.new(i.to_i64) })
+          when Int32
+            JSON::Any.new(raw.to_i64)
+          when Hash(String, Protodec::Any)
+            cast_json(raw)
+          else
+            JSON::Any.new(raw)
+          end
         else
           JSON::Any.new(value)
         end
