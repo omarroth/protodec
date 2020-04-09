@@ -213,6 +213,9 @@ module Protodec
           when "bytes"
             VarLong.to_io(io, value.size.to_i64)
             value.as_a.each { |byte| io.write_byte byte.as_i.to_u8 }
+          else # "string"
+            VarLong.to_io(io, value.to_s.bytesize.to_i64)
+            io.print value.to_s
           end
         end
       else
